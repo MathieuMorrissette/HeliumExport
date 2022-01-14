@@ -1,33 +1,56 @@
+# Written by Mathieu Morrissette
+
 import requests 
 import json
 import csv
 import io
 from datetime import datetime
 
-address = ""
+print("Helium wallet activity exporter.")
+address = input("Enter your Helium wallet address:")
+print("Time must be in ISO 8601 format ex: 2021-12-31T23:59:99Z.\r\nKeep it empty to retrieve all activity.")
+min_time = input("Min time (optional): ")
+max_time = input("Max time (optional): ")
 
-def getAddressActivity(address):
+if address == "":
+    print("Please provide an address!")
+    exit(1)
+
+
+def convertDCToHNT(dc):
+    res = dc/100000000
+    return "{:.8f}".format(res) # convert to string and remove scientific notation.
+
+def getAddressActivity(address, min_time, max_time):
     done = False
     cursor = None
 
+    # Todo add some throttling to prevent hammering the Helium api. (ex 1 req per sec)
     data = []
 
+    params = {}
+    req = "https://api.helium.io/v1/accounts/" + address + "/activity"
+
     while(not done):
-        if cursor != None:
-            datareq = json.loads(requests.get("https://api.helium.io/v1/accounts/" + address + "/activity?cursor=" + cursor + "&?min_time=2021-01-01T00:00:00Z&max_time=2021-12-31T00:00:00Z").text)
-        else:
-            datareq = json.loads(requests.get("https://api.helium.io/v1/accounts/" + address + "/activity?min_time=2021-01-01T00:00:00Z&max_time=2021-12-31T23:59:99Z").text)
+
+        if min_time != "":
+            params["min_time"] = min_time
+        if max_time != "":
+            params["max_time"] = max_time
+       
+        datareq = json.loads(requests.get(req, params=params).text)
 
         data = data + datareq["data"]
 
         if("cursor" in datareq):
-            cursor = datareq["cursor"]
+           params["cursor"] = datareq["cursor"]
         else:
+            # no cursor means no remaining data
             done = True
 
     return data
 
-# format in CryptoTaxCalculator
+# Format in CryptoTaxCalculator
 def formatActivity(dataparam):
 
     formatted = []
@@ -55,42 +78,37 @@ def formatActivity(dataparam):
         if(entry["type"] == "rewards_v2"):
             template["Type"] = "mining"
 
-            
             for reward in entry["rewards"]:
-                total = reward["amount"]/100000000
+                total += reward["amount"]
 
         if(entry["type"] == "payment_v2"):
             template["Type"] = "transfer-out"
 
             for payment in entry["payments"]:
-                total = payment["amount"]/100000000
+                total += payment["amount"]
 
         if(entry["type"] == "assert_location_v2"):
-            template["Type"] = "transfer-out" # asserting location only cost a fee
+            template["Type"] = "transfer-out" # Asserting location only cost a fee.
             
-        template["Base Amount"] = "{:.8f}".format(total) # remove scientific notation
+        template["Base Amount"] = convertDCToHNT(total)
 
-        print(template["Base Amount"])
         if "fee" in entry:
-            fee = entry["fee"]/100000000
-            template["Fee Amount (Optional)"] = "{:.8f}".format(fee) # remove scientific notation
-
-        #template["ID (Optional)"] = entry["hash"]
+            template["Fee Amount (Optional)"] = convertDCToHNT(entry["fee"])
 
         formatted.append(template)
 
     return formatted
 
 
-dataactivity = getAddressActivity(address)
+dataactivity = getAddressActivity(address, min_time, max_time)
 
-f = open("helium.json", "w") # raw data
+f = open("helium.json", "w") # write raw data to helium.json
 f.write(json.dumps(dataactivity))
 f.close()
 
 formatted = formatActivity(dataactivity)
 
-fcsv = open("helium.csv", "w") # formatted data
+fcsv = open("helium.csv", "w") # write formatted data to helium.csv
 csv_writer = csv.writer(fcsv)
 count = 0
 
